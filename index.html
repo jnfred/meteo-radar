@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radar & Météo Grenoble</title>
-    <!-- CSS Leaflet -->
+    <title>Radar & Météo</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * { box-sizing: border-box; touch-action: manipulation; }
@@ -34,7 +33,6 @@
             overflow-y: auto;
         }
 
-        /* État replié du panneau */
         #mobile-sheet.collapsed {
             transform: translateY(calc(100% - 65px));
         }
@@ -63,28 +61,75 @@
             letter-spacing: 0.5px;
         }
 
-        /* Bouton de bascule de localisation */
-        .location-btn {
-            width: 100%;
-            min-height: 36px;
-            background: #28a745;
+        /* Barre de recherche avec liste de choix */
+        .search-container {
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        .search-box {
+            display: flex;
+            gap: 6px;
+        }
+
+        .search-input {
+            flex: 1;
+            min-height: 40px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 0 10px;
             color: #fff;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        .search-input:focus { border-color: #007bff; }
+
+        .search-btn, .action-btn {
+            min-height: 40px;
+            padding: 0 10px;
             border: none;
             border-radius: 8px;
             font-weight: bold;
-            font-size: 0.85rem;
             cursor: pointer;
-            margin-bottom: 10px;
+            color: #fff;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
-            transition: background 0.2s;
+            font-size: 0.9rem;
         }
-        .location-btn.active-gps {
-            background: #ffc107;
-            color: #000;
+
+        .search-btn { background: #007bff; }
+        .gps-btn { background: #ffc107; color: #000; }
+        .home-btn { background: #28a745; }
+        .save-btn { background: #6c757d; }
+
+        /* Menu déroulant des résultats */
+        .results-dropdown {
+            position: absolute;
+            top: 45px;
+            left: 0;
+            right: 110px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 8px;
+            max-height: 180px;
+            overflow-y: auto;
+            z-index: 2000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
+
+        .result-item {
+            padding: 10px;
+            font-size: 0.85rem;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+        }
+
+        .result-item:last-child { border-bottom: none; }
+        .result-item:hover, .result-item:active { background: #007bff; }
 
         .controls-row {
             display: flex;
@@ -185,10 +230,16 @@
             <div class="sheet-title" id="sheetTitle">▲ Glisser / Toucher pour ouvrir</div>
         </div>
         
-        <!-- Bouton de commutation GPS / Maison -->
-        <button id="locBtn" class="location-btn" onclick="toggleLocation()">
-            🏠 Mode : Maison (Grenoble)
-        </button>
+        <div class="search-container">
+            <div class="search-box">
+                <input type="text" id="cityInput" class="search-input" placeholder="Chercher une ville..." onkeydown="if(event.key==='Enter') searchCities()">
+                <button class="search-btn" onclick="searchCities()" title="Rechercher">🔍</button>
+                <button class="action-btn gps-btn" onclick="getLocationGPS()" title="Ma position GPS">📍</button>
+                <button class="action-btn home-btn" onclick="goHome()" title="Aller à ma Maison">🏠</button>
+                <button class="action-btn save-btn" onclick="saveCurrentAsHome()" title="Définir la ville actuelle comme Ma Maison">📌</button>
+            </div>
+            <div id="resultsDropdown" class="results-dropdown"></div>
+        </div>
 
         <div class="controls-row">
             <button id="playBtn" class="btn" onclick="togglePlay()" disabled>Pause</button>
@@ -221,17 +272,18 @@
         </div>
     </div>
 
-    <!-- JS Leaflet -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Coordonnées de la maison (par défaut)
-        const HOME_LAT = 45.211;
-        const HOME_LON = 5.683;
+        // Chargement des coordonnées "Maison" enregistrées (ou Paris par défaut)
+        let savedHome = JSON.parse(localStorage.getItem('user_home_location')) || {
+            lat: 48.8566,
+            lon: 2.3522,
+            name: "Paris"
+        };
 
-        // Position courante de l'application
-        let activeLat = HOME_LAT;
-        let activeLon = HOME_LON;
-        let isGpsMode = false;
+        let activeLat = savedHome.lat;
+        let activeLon = savedHome.lon;
+        let activeCityName = savedHome.name;
 
         let currentModel = 'icon_d2';
 
@@ -246,10 +298,10 @@
             return dirs[Math.round(deg / 45) % 8];
         }
 
-        // Carte & Marqueur
+        // Initialisation Carte & Marqueur
         const map = L.map('map', { zoomControl: false }).setView([activeLat, activeLon], 11);
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-        const marker = L.marker([activeLat, activeLon]).addTo(map);
+        const marker = L.marker([activeLat, activeLon]).addTo(map).bindPopup(`<b>${activeCityName}</b>`);
 
         let radarLayers = [], radarTimes = [], currentIndex = 0, animationInterval = null, isPlaying = false;
 
@@ -265,51 +317,97 @@
                 : "▼ Toucher pour réduire";
         });
 
-        // --- GESTION DE LA BASCULE GPS / MAISON ---
-        function toggleLocation() {
-            const locBtn = document.getElementById('locBtn');
+        // --- GESTION DES COORDONNÉES ET STOCKAGE LOCAL ---
+        function saveCurrentAsHome() {
+            savedHome = {
+                lat: activeLat,
+                lon: activeLon,
+                name: activeCityName
+            };
+            localStorage.setItem('user_home_location', JSON.stringify(savedHome));
+            alert(`📌 "${activeCityName}" a été enregistrée comme ta Maison par défaut !`);
+        }
 
-            if (!isGpsMode) {
-                // Passage en mode GPS
-                if ("geolocation" in navigator) {
-                    locBtn.innerText = "🔍 Recherche GPS...";
-                    navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                            activeLat = position.coords.latitude;
-                            activeLon = position.coords.longitude;
-                            isGpsMode = true;
+        function goHome() {
+            document.getElementById('resultsDropdown').style.display = 'none';
+            selectCity(savedHome.lat, savedHome.lon, savedHome.name);
+        }
 
-                            locBtn.innerText = "📍 Mode : Position GPS";
-                            locBtn.classList.add('active-gps');
-
-                            updateLocationOnMap();
-                            refreshAll();
-                        },
-                        (error) => {
-                            alert("Impossible de récupérer la position GPS. Vérifie les autorisations de ton téléphone.");
-                            locBtn.innerText = "🏠 Mode : Maison (Grenoble)";
-                        },
-                        { enableHighAccuracy: true, timeout: 10000 }
-                    );
-                } else {
-                    alert("La géolocalisation n'est pas supportée par ton navigateur.");
-                }
+        function getLocationGPS() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        selectCity(position.coords.latitude, position.coords.longitude, "Ma Position GPS");
+                    },
+                    (error) => {
+                        alert("Impossible de récupérer la position GPS.");
+                    },
+                    { enableHighAccuracy: true, timeout: 10000 }
+                );
             } else {
-                // Retour en mode Maison
-                activeLat = HOME_LAT;
-                activeLon = HOME_LON;
-                isGpsMode = false;
-
-                locBtn.innerText = "🏠 Mode : Maison (Grenoble)";
-                locBtn.classList.remove('active-gps');
-
-                updateLocationOnMap();
-                refreshAll();
+                alert("La géolocalisation n'est pas disponible.");
             }
         }
 
+        // --- RECHERCHE VILLE ---
+        function searchCities() {
+            const input = document.getElementById('cityInput');
+            const dropdown = document.getElementById('resultsDropdown');
+            const query = input.value.trim();
+            if (!query) return;
+
+            const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=fr&format=json`;
+
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    dropdown.innerHTML = "";
+                    if (data.results && data.results.length > 0) {
+                        data.results.forEach(city => {
+                            const admin = city.admin1 ? `, ${city.admin1}` : '';
+                            const country = city.country ? ` (${city.country})` : '';
+                            const label = `<strong>${city.name}</strong>${admin}${country}`;
+
+                            const item = document.createElement('div');
+                            item.className = 'result-item';
+                            item.innerHTML = label;
+                            
+                            item.onclick = () => {
+                                selectCity(city.latitude, city.longitude, city.name);
+                            };
+                            
+                            dropdown.appendChild(item);
+                        });
+                        dropdown.style.display = 'block';
+                    } else {
+                        dropdown.style.display = 'none';
+                        alert("Aucune ville trouvée.");
+                    }
+                })
+                .catch(err => {
+                    console.error("Erreur de recherche:", err);
+                    dropdown.style.display = 'none';
+                });
+        }
+
+        function selectCity(lat, lon, name) {
+            activeLat = lat;
+            activeLon = lon;
+            activeCityName = name;
+
+            const input = document.getElementById('cityInput');
+            const dropdown = document.getElementById('resultsDropdown');
+
+            input.value = "";
+            input.placeholder = `Ville : ${activeCityName}`;
+            dropdown.style.display = 'none';
+
+            updateLocationOnMap();
+            refreshAll();
+        }
+
         function updateLocationOnMap() {
-            marker.setLatLng([activeLat, activeLon]);
+            marker.setLatLng([activeLat, activeLon]).bindPopup(`<b>${activeCityName}</b>`);
             map.flyTo([activeLat, activeLon], 11, { duration: 1.2 });
         }
 
@@ -331,24 +429,31 @@
 
         // --- PRÉVISIONS PLUIE 15 MIN ---
         function loadMinutelyForecast() {
-            const url = `https://api.open-meteo.com/v1/forecast?latitude=${activeLat}&longitude=${activeLon}&minutely_15=temperature_2m,precipitation&models=meteofrance_arome_france&timezone=Europe/Paris&forecast_days=1`;
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${activeLat}&longitude=${activeLon}&minutely_15=precipitation&models=meteofrance_arome_france&timezone=Europe/Paris&forecast_days=1`;
 
             fetch(url)
                 .then(r => r.json())
                 .then(data => {
                     const min15 = data.minutely_15;
-                    if (!min15) return;
+                    if (!min15 || !min15.precipitation) return;
 
                     const now = new Date();
+                    const year = now.getFullYear();
+                    const month = String(now.getMonth() + 1).padStart(2, '0');
+                    const day = String(now.getDate()).padStart(2, '0');
+                    const hours = String(now.getHours()).padStart(2, '0');
+                    const minutes = String(now.getMinutes()).padStart(2, '0');
+                    const nowIso = `${year}-${month}-${day}T${hours}:${minutes}`;
+
                     let count = 0;
                     let forecastHTML = "";
 
                     for (let i = 0; i < min15.time.length; i++) {
-                        const dt = new Date(min15.time[i]);
+                        const timeStr = min15.time[i];
                         const rain = min15.precipitation[i];
 
-                        if (dt >= now && count < 12) {
-                            const heure = dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                        if (timeStr >= nowIso && count < 12) {
+                            const heure = timeStr.split('T')[1].slice(0, 5);
                             const isRainy = rain > 0;
 
                             forecastHTML += `
@@ -361,7 +466,7 @@
                         }
                     }
 
-                    document.getElementById('rain-forecast-list').innerHTML = forecastHTML;
+                    document.getElementById('rain-forecast-list').innerHTML = forecastHTML || '<div class="forecast-card">Pas de données</div>';
                 })
                 .catch(err => console.error("Erreur prévisions 15min:", err));
         }
@@ -445,6 +550,8 @@
             loadMinutelyForecast();
         }
 
+        // Initialisation de l'affichage avec la ville enregistrée
+        document.getElementById('cityInput').placeholder = `Ville : ${activeCityName}`;
         refreshAll();
     </script>
 </body>
