@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Radar & Météo Grenoble</title>
+    <!-- CSS Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { box-sizing: border-box; touch-action: manipulation; }
+        body { 
+            margin: 0; padding: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: #121212; color: #fff; 
+            height: 100vh; overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+
+        #map { flex: 1; width: 100%; height: 100%; z-index: 1; }
+
+        /* Panneau bas rétractable */
+        #mobile-sheet {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(26, 26, 26, 0.95);
+            backdrop-filter: blur(10px);
+            border-top-left-radius: 16px;
+            border-top-right-radius: 16px;
+            z-index: 1000;
+            padding: 10px 16px 20px 16px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.6);
+            transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1);
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        /* État replié du panneau */
+        #mobile-sheet.collapsed {
+            transform: translateY(calc(100% - 65px));
+        }
+
+        .sheet-header {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            padding-bottom: 8px;
+            user-select: none;
+        }
+
+        .sheet-handle {
+            width: 40px; height: 5px;
+            background: #666;
+            border-radius: 3px;
+            margin-bottom: 6px;
+        }
+
+        .sheet-title {
+            font-size: 0.8rem;
+            font-weight: bold;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Bouton de bascule de localisation */
+        .location-btn {
+            width: 100%;
+            min-height: 36px;
+            background: #28a745;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            cursor: pointer;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: background 0.2s;
+        }
+        .location-btn.active-gps {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .btn {
+            min-height: 44px;
+            padding: 8px 12px;
+            background: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            cursor: pointer;
+            flex: 1;
+        }
+
+        .btn:disabled { background: #444; color: #888; }
+
+        .model-toggle {
+            display: flex;
+            background: #111;
+            padding: 3px;
+            border-radius: 8px;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+
+        .model-btn {
+            flex: 1; min-height: 38px;
+            background: transparent; color: #aaa;
+            border: none; border-radius: 6px;
+            font-weight: bold; font-size: 0.8rem;
+        }
+
+        .model-btn.active { background: #007bff; color: #fff; }
+
+        .grid-weather {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.85rem;
+            background: #222;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .grid-weather div { display: flex; justify-content: space-between; }
+        .grid-weather span { color: #aaa; }
+
+        .section-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #00d2ff;
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+
+        .forecast-scroll {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+        }
+
+        .forecast-card {
+            background: #222;
+            border-radius: 6px;
+            padding: 6px 10px;
+            min-width: 65px;
+            text-align: center;
+            flex-shrink: 0;
+            font-size: 0.75rem;
+        }
+
+        .forecast-card.rainy {
+            background: #004085;
+            border: 1px solid #007bff;
+        }
+
+        .forecast-time { color: #aaa; font-size: 0.7rem; }
+        .forecast-rain { font-weight: bold; margin-top: 2px; }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div id="mobile-sheet" class="collapsed">
+        <div class="sheet-header" id="sheetHeader">
+            <div class="sheet-handle"></div>
+            <div class="sheet-title" id="sheetTitle">▲ Glisser / Toucher pour ouvrir</div>
+        </div>
+        
+        <!-- Bouton de commutation GPS / Maison -->
+        <button id="locBtn" class="location-btn" onclick="toggleLocation()">
+            🏠 Mode : Maison (Grenoble)
+        </button>
+
+        <div class="controls-row">
+            <button id="playBtn" class="btn" onclick="togglePlay()" disabled>Pause</button>
+            <div id="timestamp" style="font-weight: bold; color: #00d2ff; text-align: center; flex: 1;">--:--</div>
+        </div>
+
+        <input type="range" id="timeSlider" min="0" value="0" step="1" style="width:100%; height:30px;" disabled>
+
+        <div style="margin-top: 12px;">
+            <div class="model-toggle">
+                <button id="btn-icon_d2" class="model-btn active" onclick="switchModel('icon_d2')">ICON 🇩🇪</button>
+                <button id="btn-meteofrance_arome_france" class="model-btn" onclick="switchModel('meteofrance_arome_france')">AROME 🇫🇷</button>
+            </div>
+
+            <div id="weather-ciel" style="text-align: center; font-weight: bold; color: #ffd700; margin-bottom: 8px;">Chargement...</div>
+
+            <div class="grid-weather">
+                <div><span>Temp :</span> <strong id="weather-temp">-- °C</strong></div>
+                <div><span>Ressent :</span> <strong id="weather-feels">-- °C</strong></div>
+                <div><span>Vent :</span> <strong id="weather-wind">--</strong></div>
+                <div><span>Pluie :</span> <strong id="weather-rain">-- mm</strong></div>
+                <div><span>Humidité :</span> <strong id="weather-humidity">-- %</strong></div>
+                <div><span>Pression :</span> <strong id="weather-pressure">-- hPa</strong></div>
+            </div>
+
+            <div class="section-title">Prévisions Pluie / 15 min (AROME 🇫🇷)</div>
+            <div class="forecast-scroll" id="rain-forecast-list">
+                <div class="forecast-card">Chargement...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Leaflet -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Coordonnées de la maison (par défaut)
+        const HOME_LAT = 45.211;
+        const HOME_LON = 5.683;
+
+        // Position courante de l'application
+        let activeLat = HOME_LAT;
+        let activeLon = HOME_LON;
+        let isGpsMode = false;
+
+        let currentModel = 'icon_d2';
+
+        const WEATHER_CODES = {
+            0: "Ciel dégagé ☀️", 1: "Principalement dégagé 🌤️", 2: "Partiellement nuageux ⛅",
+            3: "Couvert ☁️", 45: "Brouillard 🌫️", 51: "Bruine 🌧️", 61: "Pluie faible 🌧️",
+            63: "Pluie 🌧️", 65: "Pluie forte 🌧️", 71: "Neige ❄️", 80: "Averses 🌦️", 95: "Orage 🌩️"
+        };
+
+        function getWindDirection(deg) {
+            const dirs = ["N ⬇️", "NE ↙️", "E ⬅️", "SE ↖️", "S ⬆️", "SO ↗️", "O ➡️", "NO ↘️"];
+            return dirs[Math.round(deg / 45) % 8];
+        }
+
+        // Carte & Marqueur
+        const map = L.map('map', { zoomControl: false }).setView([activeLat, activeLon], 11);
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        const marker = L.marker([activeLat, activeLon]).addTo(map);
+
+        let radarLayers = [], radarTimes = [], currentIndex = 0, animationInterval = null, isPlaying = false;
+
+        // Panneau rétractable
+        const sheet = document.getElementById('mobile-sheet');
+        const sheetHeader = document.getElementById('sheetHeader');
+        const sheetTitle = document.getElementById('sheetTitle');
+
+        sheetHeader.addEventListener('click', () => {
+            sheet.classList.toggle('collapsed');
+            sheetTitle.innerText = sheet.classList.contains('collapsed') 
+                ? "▲ Glisser / Toucher pour ouvrir" 
+                : "▼ Toucher pour réduire";
+        });
+
+        // --- GESTION DE LA BASCULE GPS / MAISON ---
+        function toggleLocation() {
+            const locBtn = document.getElementById('locBtn');
+
+            if (!isGpsMode) {
+                // Passage en mode GPS
+                if ("geolocation" in navigator) {
+                    locBtn.innerText = "🔍 Recherche GPS...";
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            activeLat = position.coords.latitude;
+                            activeLon = position.coords.longitude;
+                            isGpsMode = true;
+
+                            locBtn.innerText = "📍 Mode : Position GPS";
+                            locBtn.classList.add('active-gps');
+
+                            updateLocationOnMap();
+                            refreshAll();
+                        },
+                        (error) => {
+                            alert("Impossible de récupérer la position GPS. Vérifie les autorisations de ton téléphone.");
+                            locBtn.innerText = "🏠 Mode : Maison (Grenoble)";
+                        },
+                        { enableHighAccuracy: true, timeout: 10000 }
+                    );
+                } else {
+                    alert("La géolocalisation n'est pas supportée par ton navigateur.");
+                }
+            } else {
+                // Retour en mode Maison
+                activeLat = HOME_LAT;
+                activeLon = HOME_LON;
+                isGpsMode = false;
+
+                locBtn.innerText = "🏠 Mode : Maison (Grenoble)";
+                locBtn.classList.remove('active-gps');
+
+                updateLocationOnMap();
+                refreshAll();
+            }
+        }
+
+        function updateLocationOnMap() {
+            marker.setLatLng([activeLat, activeLon]);
+            map.flyTo([activeLat, activeLon], 11, { duration: 1.2 });
+        }
+
+        // --- MÉTÉO TEMPS RÉEL ---
+        function loadWeatherData() {
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${activeLat}&longitude=${activeLon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,surface_pressure,wind_speed_10m,wind_direction_10m&models=${currentModel}`;
+            fetch(url).then(r => r.json()).then(data => {
+                const cur = data.current;
+                if (!cur) return;
+                document.getElementById('weather-ciel').innerText = WEATHER_CODES[cur.weather_code] || "Météo";
+                document.getElementById('weather-temp').innerText = `${cur.temperature_2m} °C`;
+                document.getElementById('weather-feels').innerText = `${cur.apparent_temperature} °C`;
+                document.getElementById('weather-wind').innerText = `${cur.wind_speed_10m} km/h ${getWindDirection(cur.wind_direction_10m)}`;
+                document.getElementById('weather-rain').innerText = `${cur.precipitation} mm`;
+                document.getElementById('weather-humidity').innerText = `${cur.relative_humidity_2m} %`;
+                document.getElementById('weather-pressure').innerText = `${Math.round(cur.surface_pressure)} hPa`;
+            });
+        }
+
+        // --- PRÉVISIONS PLUIE 15 MIN ---
+        function loadMinutelyForecast() {
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${activeLat}&longitude=${activeLon}&minutely_15=temperature_2m,precipitation&models=meteofrance_arome_france&timezone=Europe/Paris&forecast_days=1`;
+
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    const min15 = data.minutely_15;
+                    if (!min15) return;
+
+                    const now = new Date();
+                    let count = 0;
+                    let forecastHTML = "";
+
+                    for (let i = 0; i < min15.time.length; i++) {
+                        const dt = new Date(min15.time[i]);
+                        const rain = min15.precipitation[i];
+
+                        if (dt >= now && count < 12) {
+                            const heure = dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                            const isRainy = rain > 0;
+
+                            forecastHTML += `
+                                <div class="forecast-card ${isRainy ? 'rainy' : ''}">
+                                    <div class="forecast-time">${heure}</div>
+                                    <div class="forecast-rain">${isRainy ? rain + ' mm' : '☀️'}</div>
+                                </div>
+                            `;
+                            count++;
+                        }
+                    }
+
+                    document.getElementById('rain-forecast-list').innerHTML = forecastHTML;
+                })
+                .catch(err => console.error("Erreur prévisions 15min:", err));
+        }
+
+        // --- RADAR PLUIE ---
+        function loadRadarData() {
+            fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json()).then(data => {
+                const pastPasses = data.radar.past;
+                if (!pastPasses) return;
+                
+                radarLayers.forEach(l => map.removeLayer(l));
+                radarLayers = []; radarTimes = [];
+
+                const selectedPasses = pastPasses.slice(-6);
+                selectedPasses.forEach(pass => {
+                    const layer = L.tileLayer(`${data.host}${pass.path}/256/{z}/{x}/{y}/0/1_1.png`, { 
+                        opacity: 0,
+                        maxNativeZoom: 7, 
+                        maxZoom: 19
+                    }).addTo(map);
+                    
+                    radarLayers.push(layer);
+                    radarTimes.push(pass.time);
+                });
+
+                document.getElementById('timeSlider').max = radarLayers.length - 1;
+                document.getElementById('timeSlider').disabled = false;
+                document.getElementById('playBtn').disabled = false;
+                showFrame(0);
+                startAnimation();
+            });
+        }
+
+        function showFrame(index) {
+            if (!radarLayers[currentIndex]) return;
+            radarLayers[currentIndex].setOpacity(0);
+            currentIndex = index;
+            radarLayers[currentIndex].setOpacity(0.65);
+            document.getElementById('timeSlider').value = currentIndex;
+            const date = new Date(radarTimes[currentIndex] * 1000);
+            document.getElementById('timestamp').innerText = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function startAnimation() {
+            isPlaying = true;
+            document.getElementById('playBtn').innerText = "Pause";
+            animationInterval = setInterval(() => {
+                showFrame((currentIndex + 1) % radarLayers.length);
+            }, 800);
+        }
+
+        function togglePlay() {
+            if (isPlaying) {
+                clearInterval(animationInterval);
+                isPlaying = false;
+                document.getElementById('playBtn').innerText = "Jouer";
+            } else {
+                startAnimation();
+            }
+        }
+
+        function switchModel(m) {
+            currentModel = m;
+            document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-${m}`).classList.add('active');
+            loadWeatherData();
+        }
+
+        document.getElementById('timeSlider').addEventListener('input', (e) => {
+            if (isPlaying) togglePlay();
+            showFrame(parseInt(e.target.value));
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && isPlaying) togglePlay();
+        });
+
+        function refreshAll() {
+            loadRadarData();
+            loadWeatherData();
+            loadMinutelyForecast();
+        }
+
+        refreshAll();
+    </script>
+</body>
+</html>
