@@ -473,12 +473,15 @@
 
         // --- RADAR PLUIE ---
         function loadRadarData() {
+            stopAnimation();
+
             fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json()).then(data => {
                 const pastPasses = data.radar.past;
-                if (!pastPasses) return;
+                if (!pastPasses || pastPasses.length === 0) return;
                 
                 radarLayers.forEach(l => map.removeLayer(l));
-                radarLayers = []; radarTimes = [];
+                radarLayers = []; 
+                radarTimes = [];
 
                 const selectedPasses = pastPasses.slice(-6);
                 selectedPasses.forEach(pass => {
@@ -495,13 +498,14 @@
                 document.getElementById('timeSlider').max = radarLayers.length - 1;
                 document.getElementById('timeSlider').disabled = false;
                 document.getElementById('playBtn').disabled = false;
+                
                 showFrame(0);
                 startAnimation();
             });
         }
 
         function showFrame(index) {
-            if (!radarLayers[currentIndex]) return;
+            if (!radarLayers[currentIndex] || !radarLayers[index]) return;
             radarLayers[currentIndex].setOpacity(0);
             currentIndex = index;
             radarLayers[currentIndex].setOpacity(0.65);
@@ -511,18 +515,28 @@
         }
 
         function startAnimation() {
+            if (animationInterval) clearInterval(animationInterval);
+            
             isPlaying = true;
             document.getElementById('playBtn').innerText = "Pause";
+            
             animationInterval = setInterval(() => {
                 showFrame((currentIndex + 1) % radarLayers.length);
             }, 800);
         }
 
+        function stopAnimation() {
+            if (animationInterval) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
+            isPlaying = false;
+            document.getElementById('playBtn').innerText = "Jouer";
+        }
+
         function togglePlay() {
             if (isPlaying) {
-                clearInterval(animationInterval);
-                isPlaying = false;
-                document.getElementById('playBtn').innerText = "Jouer";
+                stopAnimation();
             } else {
                 startAnimation();
             }
@@ -536,12 +550,12 @@
         }
 
         document.getElementById('timeSlider').addEventListener('input', (e) => {
-            if (isPlaying) togglePlay();
+            if (isPlaying) stopAnimation();
             showFrame(parseInt(e.target.value));
         });
 
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden && isPlaying) togglePlay();
+            if (document.hidden && isPlaying) stopAnimation();
         });
 
         function refreshAll() {
